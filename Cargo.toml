@@ -1,0 +1,11 @@
+[package]
+name = "n_queens"
+version = "0.1.0"
+authors = ["Eric Hermes <erichermes@gmail.com>"]
+
+[dependencies]
+rand = "0.3"
+pbr = "1.0"
+
+[profile.release]
+debug = true
