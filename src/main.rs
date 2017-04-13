@@ -42,7 +42,7 @@ fn main() {
     let mut rng = rand::weak_rng();
     let between = Range::new(0, N);
     let probrange = Range::new(0f32, 1f32);
-//    let mut lookup = de_prob_lookup();
+//    let lookup = de_prob_lookup();
 
     // Number of minimizations to perform
     let trials = 1000000;
@@ -56,11 +56,12 @@ fn main() {
     pb.finish_println("Done!");
 }
 
-//fn de_prob_lookup() -> HashMap<&isize, &f32> {
+//fn de_prob_lookup() -> HashMap<isize, f32> {
 //    let mut lookup = HashMap::new();
-//    let max_clashes = (N * (N - 1)) / 2;
-//    for i in 1..max_clashes {
-//        lookup.insert(i, (i as f32 * B).exp());
+//    lookup.insert(0, 1f32);
+//    for i in 1..N as isize {
+//        lookup.insert(i, (-i as f32 * B).exp());
+//        lookup.insert(-i, 1f32);
 //    };
 //    lookup
 //}
@@ -114,7 +115,12 @@ fn run(between: &Range<usize>, probrange: &Range<f32>, rng: &mut rand::XorShiftR
         // 1/kT with B.
         // If we accept the move, replace the old queen with the new one
         // and update the total system energy.
-        if probrange.ind_sample(rng) < (-de as f32*B).exp() {
+//        if match lookup.get(&de) {
+//            Some(&prob) => (prob > 1f32) || (probrange.ind_sample(rng) < prob),
+//            None => panic!{"{} not found in lookup table!", de},
+//        } {
+
+        if (de <= 0) || (probrange.ind_sample(rng) < (-de as f32 * B).exp()) {
             queens[qn] = newqueen;
             e += de;
 
