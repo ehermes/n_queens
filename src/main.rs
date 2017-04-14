@@ -1,20 +1,26 @@
 extern crate rand;
 extern crate pbr;
 
-//use std::collections::HashMap;
 use rand::distributions::{IndependentSample, Range};
 use pbr::ProgressBar;
 
 // N = size of the board
 const N: usize = 8;
-// B is beta, 1/kB T
-const B: f32 = 1f32/0.165f32;
+// highest temperature for parallel tempering
+const T_HIGH: f32 = 2f32;
+// lowest temperature for parallel tempering
+const T_LOW: f32 = 0.01f32;
+// Number of images
+const NT: usize = 20;
 // number of moves to give up finding a solution after
-const MAXMOVES: usize = 1000000;
+const MAXMOVES: usize = 100000000;
+// Probability of swapping two boards
+const PSWAP: f32 = 1f32 / NT as f32;
 
+#[derive(Copy, Clone)]
 struct Queen {
-    x: isize,
-    y: isize,
+    x: usize,
+    y: usize,
 }
 
 impl Queen {
@@ -32,6 +38,85 @@ impl Queen {
     }
 }
 
+struct Board {
+    queens: [Queen; N],
+    e: isize,
+}
+
+impl Board {
+    fn new(queens: [Queen; N]) -> Board {
+        let mut board = Board{ queens: queens, e: 0 };
+        board.e = board.calc_e();
+        return board;
+    }
+
+    fn calc_e(&mut self) -> isize {
+        let mut e = 0;
+        for i in 1..N {
+            for j in 0..i {
+                if self.queens[i].clash(&self.queens[j]) {
+                    e += 1;
+                }
+            }
+        }
+        return e;
+    }
+
+
+    fn de_move(&self, qn: usize, xnew: usize, ynew: usize) -> isize {
+        let mut de: isize = 0;
+        let newqueen = Queen { x: xnew, y: ynew };
+        for i in 0..N {
+            if i == qn { continue };
+            if self.queens[i].clash(&self.queens[qn]) {
+                de -= 1;
+            };
+            if self.queens[i].clash(&newqueen) {
+                de += 1;
+            };
+        }
+        return de;
+    }
+
+    fn move_queen(&mut self, qn: usize, x: usize, y: usize) {
+        if self.queens[qn].x == x && self.queens[qn].y == y {
+            return
+        };
+        self.e += self.de_move(qn, x, y);
+        self.queens[qn] = Queen { x: x, y: y };
+    }
+
+    fn print_board(&self) {
+        let mut barray = [[0usize; N]; N];
+        for queen in self.queens.iter() {
+            barray[queen.x][queen.y] += 1;
+        }
+        print!{"╔═"};
+        for _ in 1..N {
+            print!{"╤═"};
+        }
+        print!{"╗\n"};
+        for i in 0..N {
+            print!{"║{}", barray[i][0]};
+            for j in 1..N {
+                print!{"│{}", barray[i][j]};
+            }
+            print!{"║\n"};
+            if i != N - 1 {
+                print!{"╟─"};
+                for _ in 1..N {
+                    print!{"┼─"};
+                }
+                print!{"╢\n"};
+            }
+        }
+        print!{"╚═"};
+        for _ in 1..N {
+            print!{"╧═"};
+        }
+        print!{"╝\n"};
+    }
+}
 
 
 fn main() {
@@ -40,92 +125,82 @@ fn main() {
     // re-initialize RNG for every solution. This might not be
     // necessary.
     let mut rng = rand::weak_rng();
-    let between = Range::new(0, N);
+    let nrange = Range::new(0, N);
+    let ntrange = Range::new(0, NT);
     let probrange = Range::new(0f32, 1f32);
-//    let lookup = de_prob_lookup();
 
     // Number of minimizations to perform
-    let trials = 1000000;
+    let trials = 200000;
 
     let mut pb = ProgressBar::new(trials);
     for i in 0..trials {
-        totsteps += run(&between, &probrange, &mut rng);
+        totsteps += run(&nrange, &ntrange, &probrange, &mut rng);
         pb.message(format!("Average number of steps: {} | ", totsteps as f32/((i+1) as f32)).as_str());
         pb.inc();
     };
-    pb.finish_println("Done!");
+    pb.finish_println("Done!\n");
 }
 
-//fn de_prob_lookup() -> HashMap<isize, f32> {
-//    let mut lookup = HashMap::new();
-//    lookup.insert(0, 1f32);
-//    for i in 1..N as isize {
-//        lookup.insert(i, (-i as f32 * B).exp());
-//        lookup.insert(-i, 1f32);
-//    };
-//    lookup
-//}
+fn run(nrange: &Range<usize>, ntrange: &Range<usize>, probrange: &Range<f32>, rng: &mut rand::XorShiftRng) -> usize {
 
-fn run(between: &Range<usize>, probrange: &Range<f32>, rng: &mut rand::XorShiftRng) -> usize {
-    // Create a Vec of randomly placed Queens
-    let mut queens = Vec::new();
-    for _ in 0..N {
-        let x = between.ind_sample(rng);
-        let y = between.ind_sample(rng);
-        queens.push(Queen { x: x as isize, y: y as isize });
+    // Temperature increase factor between each adjacent image
+    let tfact: f32 = (T_HIGH / T_LOW).powf((NT as f32).powi(-1));
+    // Vec of beta values
+    let mut bs: Vec<f32> = Vec::new();
+
+    let mut boards: Vec<Board> = Vec::new();
+
+    // Create NT NxN boards, each with N randomly placed queens
+    for i in 0..NT {
+        bs.push((T_LOW * tfact.powi(i as i32)).powi(-1));
+        let mut board = Board::new([Queen { x: 0, y: 0 }; N]);
+        
+        for j in 0..N {
+            let x = nrange.ind_sample(rng);
+            let y = nrange.ind_sample(rng);
+            board.move_queen(j, x, y);
+        };
+        boards.push(board);
     };
-
-    // "Energy" of the system. A solution will have e==0.
-    let mut e: isize = 0;
-
-    // Calculate initial energy for random configuration
-    for i in 1..N {
-        for j in 0..i {
-            if queens[i].clash(&queens[j]) {
-                e += 1;
-            }
-        }
-    };
-
-    // Change of energy associated with a trial move
-    let mut de: isize;
 
     for j in 1..MAXMOVES {
-        de = 0;
-        // Pick a random queen to move and a new position
-        let qn = between.ind_sample(rng);
-        let x = between.ind_sample(rng);
-        let y = between.ind_sample(rng);
-        let newqueen = Queen { x: x as isize, y: y as isize };
+        // Pick a board to work with
+        let bn = ntrange.ind_sample(rng);
 
-        // Calculate de by looking at all clashes for new and old position
-        for i in 0..N {
-            if i == qn { continue };
-            if queens[qn].clash(&queens[i]) {
-                de -= 1;
+        // Check to see if we're switching boards
+        if probrange.ind_sample(rng) < PSWAP {
+            // If we picked the last board and are swapping boards, just do
+            // nothing and continue with the next loop. This effectively lowers
+            // our probability of swapping boards, but it makes the code a lot
+            // simpler.
+            if bn == NT - 1 { continue };
+            let de = boards[bn + 1].e - boards[bn].e;
+            let db = bs[bn] - bs[bn + 1];
+            if (de as f32 * db < 0f32) || (probrange.ind_sample(rng) < (-de as f32 * db).exp()) {
+                boards.swap(bn, bn+1);
             };
-            if newqueen.clash(&queens[i]) {
-                de += 1;
-            };
+            continue;
         };
-        
+
+        // Pick a random queen to move and a new position
+        let qn = nrange.ind_sample(rng);
+        let x = nrange.ind_sample(rng);
+        let y = nrange.ind_sample(rng);
+        let de = boards[bn].de_move(qn, x, y);
+ 
         // Metropolis-Hastings algorithm. If de <= 0, accept the move.
         // Otherwise, accept the move with probability given by e^(-dE/kT)
         // (so, bigger de => less likely to accept move). Here we replace
         // 1/kT with B.
         // If we accept the move, replace the old queen with the new one
         // and update the total system energy.
-//        if match lookup.get(&de) {
-//            Some(&prob) => (prob > 1f32) || (probrange.ind_sample(rng) < prob),
-//            None => panic!{"{} not found in lookup table!", de},
-//        } {
 
-        if (de <= 0) || (probrange.ind_sample(rng) < (-de as f32 * B).exp()) {
-            queens[qn] = newqueen;
-            e += de;
+        if (de <= 0) || (probrange.ind_sample(rng) < (-de as f32 * bs[bn]).exp()) {
+            boards[bn].move_queen(qn, x, y);
 
             // If the energy is 0, we're done.
-            if e == 0 {
+            if boards[bn].e == 0 {
+                //boards[bn].print_board();
                 return j;
             };
         };
